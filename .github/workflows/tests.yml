@@ -1,0 +1,53 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  odoo-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Start PostgreSQL
+        run: docker compose up -d db
+
+      - name: Install module and run its tests
+        # -i installs the module into a fresh "ci" database.
+        # --test-tags limits the run to this module's tests.
+        # Odoo exits 0 even when tests fail, so we save the log and check it next.
+        run: |
+          docker compose run --rm odoo odoo \
+            -d ci \
+            -i us_sales_tax \
+            --test-enable \
+            --test-tags /us_sales_tax \
+            --stop-after-init \
+            2>&1 | tee odoo-test.log
+
+      - name: Fail the build if any test failed or no tests ran
+        run: |
+          if grep -E " (ERROR|CRITICAL) " odoo-test.log; then
+            echo "::error::Odoo logged errors during the test run (see above)."
+            exit 1
+          fi
+          if ! grep -E "0 failed, 0 error\(s\) of [1-9][0-9]* tests" odoo-test.log; then
+            echo "::error::Could not find a passing test summary. Did the tests run?"
+            exit 1
+          fi
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: odoo-test-log
+          path: odoo-test.log
+
+      - name: Shut down containers
+        if: always()
+        run: docker compose down -v
